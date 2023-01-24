@@ -30,7 +30,7 @@ In a moment you will decide if the resource is consistent with the requirements 
 * provides no information about the unit -- call this unclear
 
 MUST: output the bullet list analysis
-MUST: below the analysis, output final results in JSON like
+MUST: below the analysis, output final results in fully quoted valued JSON like
 
 Output
 {
@@ -80,6 +80,7 @@ export default async function semanticExtract<T extends Record<string, string>>(
     return extracted;
   } catch (e) {
     console.log("Could not extract", e)
+    console.error(completion.choices[0].text)
     return {} as any;
   }
 }

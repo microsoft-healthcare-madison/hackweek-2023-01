@@ -3,7 +3,6 @@ import semanticExtract from "./semanticExtract.ts";
 import * as util from "./util.ts";
 import patient from "./synthea_jill.json" assert { type: "json" };
 
-
 const db = patient.entry.map((e) => e.resource);
 
 async function semanticExtractAll({
@@ -13,44 +12,55 @@ async function semanticExtractAll({
   filter: string;
   extract: Record<string, string>;
 }) {
-  const [resourceTypes, ...filterTerms] = await filterRegex(filter);
-  const filters = filterTerms.map((ff) => ff.map((f) => new RegExp(f, "i")));
-  console.log("Testing DB with", resourceTypes, filters);
-  const matches = db.filter((r) => {
-    let rj = JSON.stringify({ ...r, meta: undefined, text: undefined });
-    return (
-      resourceTypes.some((t) => r.resourceType == t) &&
-      filters.every((probes) => probes.some((p) => rj.match(p)))
-    );
-  });
+  const {isComplete, probes} = await filterRegex(filter);
+  const matches = [];
 
-  console.log("Probes filtered down to", matches.length)
-  console.log("Sending these to semanticExtract for handling")
+  for (const r of db) {
+    let matching = true;
+    for (const [where, what] of probes) {
+      const targets = Object.keys(r)
+        .filter((k) => k.startsWith(where.slice(1)))
+        .map((k) => JSON.stringify((r as any)[k]).toLowerCase())
+        .join(" ");
+      if (what.some((v) => targets.match(new RegExp(v.toLowerCase())))) {
+        continue;
+      } else {
+        matching = false;
+        break;
+      }
+    }
+    if (matching) {
+      matches.push(r);
+    }
+  }
+
+  console.log("Probes filtered down to", matches.length, "complete?", isComplete);
+
+  console.log("Sending these to semanticExtract for handling");
   let extraction = [];
   for (const r of matches.slice(0, util.MAX_RESOURCES)) {
     try {
-    let extracted = await semanticExtract(r, filter, template);
-    if (extracted?.evidence?.contradictory == 0) {
-      extraction.push(extracted);
-    } else {
-      console.log("Poor evidence", extracted);
+      let extracted = await semanticExtract(r, filter, template);
+      if (extracted?.evidence?.contradictory == 0) {
+        extraction.push(extracted);
+      } else {
+        console.log("Poor evidence", extracted);
+      }
+    } catch (e) {
+      console.log("Skipping failed extraction in extractAll", e);
     }
-  } catch (e) {
-    console.log("Skipping failed extraction in extractAll", e)
-  }
   }
 
   return extraction;
 }
-
 
 const promptTemplateDialog = `
 Write javascript to extract data from a FHIR server in response to a question.
 
 
 You can use:
-${"```"}ts
 
+${"```"}ts
 interface SemanticExtract {
   filter: string, // natural language description of which resources to keep
   extract: Record<string, string> // map of arbitrary keys => natural language descriptions of values
@@ -61,12 +71,13 @@ declare function semanticExtractAll(template: SemanticExtract): Record<string, a
 declare function answer(a: any) // return an answer when it's ready
 
 await semanticExtractAll({
-  filter: "FHIR Observation that is blood pressure measurement",
+  filter: "FHIR Observation of blood pressure",
   extract: {
     t: "effective time ISO8601",
     v: "measured value"
   }
 })
+${"```"}
 
 ---
 CONTEXT
@@ -83,7 +94,7 @@ const normalBpRange = {
 };
 
 const bpReadingsOutsideNormalRange = await semanticExtractAll({
-  filter: "FHIR Observation that is blood pressure measurement",
+  filter: "FHIR Observation of blood pressure",
   extract: {
     systolic: "measured systolic value",
     diastolic: "measured diastolic value"
@@ -107,7 +118,7 @@ Q. What are my food allergies?
 Execute
 ${"```"}
 const foodAllergies = await semanticExtractAll({
-  filter: "FHIR AllergyIntolerance to a food",
+  filter: "FHIR AllergyIntolerance to food",
   extract: {
     food: "allergen name"
   }
@@ -123,7 +134,7 @@ Q. Do I have any heart problems?
 Execute
 ${"```"}
 const heartProblems = await semanticExtractAll({
-  filter: "FHIR Condition or Observation that is a problem related to heart",
+  filter: "FHIR Condition or Observation about cardiovascular problem",
   extract: {
     name: "name of the problem"
   }
@@ -154,7 +165,7 @@ Q. Who is my primary care doctor?
 Execute
 ${"```"}
 const primaryCareDoctor = await semanticExtractAll({
-  filter: "FHIR Patient with a primary care provider"
+  filter: "FHIR Patient with primary care provider"
   extract: {
     name: "name of the primary care provider"
   }
@@ -170,7 +181,7 @@ Q. What is my home address?
 Execute
 ${"```"}
 const homeAddress = await semanticExtractAll({
-  filter: "FHIR Patient",
+  filter: "FHIR Patient with home address",
   extract: {
     address: "home address"
   }
@@ -180,21 +191,40 @@ answer(homeAddress);
 ${"```"}
 ---
 
-Q. Have I ever had general anaesthesia?
+Q. When did I first have general anaesthesia?
 
 Execute
 ${"```"}
 const anaesthesia = await semanticExtractAll({
-  filter: "FHIR Procedure performed under general anaesthesia",
+  filter: "FHIR Procedure involving general anaesthesia",
   extract: {
     t: "effective time ISO8601"
   }
 });
 
+anaesthesia.sort((a, b) => a.t > b.t ? 1 : a.t == b.t ? 0 : -1)
+
 answer(anaesthesia);
 ${"```"}
 ---
 
+Q. Do I have more allergies than conditions?
+Execute
+${"```"}
+const allergies = await semanticExtractAll({
+  filter: "FHIR AllergyIntolerance",
+  extract: {}
+});
+
+const conditions = await semanticExtractAll({
+  filter: "FHIR AllergyIntolerance",
+  extract: {}
+});
+
+
+answer(allergies.length > conditions.length);
+${"```"}
+---
 
 Q. {{input.question}}
 
@@ -203,12 +233,10 @@ Execute
 
 let _answer;
 function answer(a) {
-_answer = a;
+  _answer = a;
 }
 
-export default async function dialog(
-  question: string
-): Promise<unknown> {
+export default async function dialog(question: string): Promise<unknown> {
   let prompt = promptTemplateDialog
     .replaceAll("{{input.question}}", question)
     .replaceAll("{{input.today}}", new Date().toISOString().slice(0, 10));
@@ -220,10 +248,14 @@ export default async function dialog(
   });
 
   try {
-    let extracted = completion.choices[0].text!.match(/```.*```/gms)[0].slice(3, -3)
+    let extracted = completion.choices[0]
+      .text!.match(/```.*```/gms)[0]
+      .slice(3, -3);
     console.log(extracted);
 
-    let result = await eval(`(async function(){${extracted}\nreturn _answer;})()`);
+    let result = await eval(
+      `(async function(){${extracted}\nreturn _answer;})()`
+    );
     console.log("Answered", result);
     return result;
   } catch (e) {
@@ -231,5 +263,4 @@ export default async function dialog(
   }
 }
 
-dialog(Deno.args[0])
-
+dialog(Deno.args[0]);

@@ -1,4 +1,6 @@
 import "https://deno.land/x/dotenv@v3.2.0/load.ts";
+export {default as jsonPath} from "npm:jsonpath@1";
+
 import {Configuration, CreateCompletionRequest, OpenAIApi } from "npm:openai@3";
 export {default as looseJsonParse} from "npm:loose-json@1"
 
