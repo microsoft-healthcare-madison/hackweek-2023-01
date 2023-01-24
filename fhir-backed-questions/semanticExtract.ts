@@ -9,24 +9,28 @@ interface WithEvidence {
 }
 
 let promptTemplateSemanticExtract = `
-Example bullet list analysis
+Example bullet list analysis for "male patient born in 1970s":
 * patient. resource is a patient => consistent 
 * born in 1970s. resource has birthdate 1973-02-05, which is in the 1970s  => consistent
 * male. The resource has no gender => unknown
 * in California. The resource has home address in Nevada, which is not in California => inconsistent 
+
+Output
+{
+  "evidence": { // skipped to save space
+
 ---
 {{input.resource}}
 ---
 
 In a moment you will decide if the resource is consistent with the requirements "{{input.filter}}" Think carefully. Break the requirements into logical units word by word. For each unit, determine whether the resource:
 
- * explicitly meets the logical unit -- call this consistent 
+* explicitly meets the logical unit -- call this consistent 
 * includes information that cannot be true given the unit -- call this contradictory
 * provides no information about the unit -- call this unclear
 
 MUST: output the bullet list analysis
-
-MUST: output final results in JSON like
+MUST: below the analysis, output final results in JSON like
 
 Output
 {
@@ -40,6 +44,8 @@ Output
 
 Provide a null value for anything you cannot determine.
 ---
+
+Bullet list for "
 `;
 export default async function semanticExtract<T extends Record<string, string>>(
   resource: any,
@@ -47,7 +53,7 @@ export default async function semanticExtract<T extends Record<string, string>>(
   template: T
 ): Promise<Record<keyof T, string> & WithEvidence> {
   let prompt = promptTemplateSemanticExtract
-    .replaceAll("{{input.resource}}", JSON.stringify(resource))
+    .replaceAll("{{input.resource}}", JSON.stringify(resource, null, 2))
     .replaceAll("{{input.filter}}", filter)
     .replaceAll(
       "{{input.extractionTemplate}}",
@@ -55,7 +61,7 @@ export default async function semanticExtract<T extends Record<string, string>>(
         .map(([key, description]) => `"${key}": // ${description}`)
         .join("\n")
     );
-  console.log(prompt);
+  console.log("Semantic extract", resource, filter, template);
 
   const completion = await util.completion({
     model: "text-davinci-003",
@@ -65,11 +71,15 @@ export default async function semanticExtract<T extends Record<string, string>>(
 
   try {
     let extracted = util.looseJsonParse(
-      completion.choices[0].text!.match(/\{(.*)\}/gms)![0]
+      completion.choices?.[0].text?.match(/\{(.*)\}/gms)?.[0] || "{}"
     );
-    console.log(extracted);
+    console.log("extracted", extracted);
+    if (Object.keys(extracted).length == 0) {
+      console.debug(completion.choices[0].text)
+    }
     return extracted;
   } catch (e) {
+    console.log("Could not extract", e)
     return {} as any;
   }
 }

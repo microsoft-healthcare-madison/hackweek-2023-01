@@ -9,7 +9,7 @@ export const MAX_RESOURCES = parseInt(env.MAX_RESOURCES || "3");
 
 export const completion = async (params: CreateCompletionRequest, ) => {
   const completion = await openai.createCompletion(params);
-  console.log(JSON.stringify(completion.data, null, 2))
+  // console.log(JSON.stringify(completion.data, null, 2))
   return completion.data
 }
 

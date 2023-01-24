@@ -5,7 +5,6 @@ import patient from "./synthea_jill.json" assert { type: "json" };
 
 
 const db = patient.entry.map((e) => e.resource);
-console.log("UPD TP", util.MAX_RESOURCES);
 
 async function semanticExtractAll({
   filter,
@@ -14,9 +13,9 @@ async function semanticExtractAll({
   filter: string;
   extract: Record<string, string>;
 }) {
-  console.log("Semantic extract for", filter);
   const [resourceTypes, ...filterTerms] = await filterRegex(filter);
   const filters = filterTerms.map((ff) => ff.map((f) => new RegExp(f, "i")));
+  console.log("Testing DB with", resourceTypes, filters);
   const matches = db.filter((r) => {
     let rj = JSON.stringify({ ...r, meta: undefined, text: undefined });
     return (
@@ -25,14 +24,20 @@ async function semanticExtractAll({
     );
   });
 
+  console.log("Probes filtered down to", matches.length)
+  console.log("Sending these to semanticExtract for handling")
   let extraction = [];
   for (const r of matches.slice(0, util.MAX_RESOURCES)) {
+    try {
     let extracted = await semanticExtract(r, filter, template);
-    if (extracted.evidence.contradictory == 0) {
+    if (extracted?.evidence?.contradictory == 0) {
       extraction.push(extracted);
     } else {
       console.log("Poor evidence", extracted);
     }
+  } catch (e) {
+    console.log("Skipping failed extraction in extractAll", e)
+  }
   }
 
   return extraction;
@@ -207,8 +212,6 @@ export default async function dialog(
   let prompt = promptTemplateDialog
     .replaceAll("{{input.question}}", question)
     .replaceAll("{{input.today}}", new Date().toISOString().slice(0, 10));
-
-  console.log(prompt);
 
   const completion = await util.completion({
     model: "text-davinci-003",

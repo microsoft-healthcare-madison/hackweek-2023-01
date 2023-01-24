@@ -8,7 +8,7 @@ const promptTemplateFilterRegex = `Probes for "FHIR AllergyIntolerance to a food
 
 Probes for "FHIR Condition diabetes diagnosed recorded after 1999":
 * resource types: ["Condition", "Observation"]
-* diabetes. Probes: ["diabetes", "T2DM", "sugar"]
+* diabetes. Probes: ["diabetes", "blood glucose"]
 * recorded after 1999. I cannot perform relative comparisons -> No probes.
 
 Probes for "FHIR Condition diagnosed in 1990s":
@@ -28,8 +28,11 @@ In a moment you will decide on a set of filters to narrow down a large collectio
 
 MUST: Consider all resource types that could include this information
 MUST: Output probes to ensure that at least one probe in the set will match any conceivable FHIR resource that meets the requirements
+MUST NOT: Output probes with a different meaning from the query
+MUST NOT: Output probes with generic words like "measurement"
 MUST: Decline to output probes for relative concepts like comparisons, greater than, above, under, less than
-MUST: Use synonyms, acronyms, abbreviations, and other jargon to ensure complete coverage.
+MUST: Use synonyms to ensure complete coverage
+MUST: Use synonyms from the FHIR specification when they apply
 
 Probes for "{{input.filter}}":
 *`;
@@ -38,7 +41,7 @@ export default async function filterRegex<T extends Record<string, string>>(
   filter: string
 ): Promise<string[][]> {
   let prompt = promptTemplateFilterRegex.replaceAll("{{input.filter}}", filter);
-  console.log(prompt);
+  console.log("Getting probes for", filter);
 
   const completion = await util.completion({
     model: "text-davinci-003",
