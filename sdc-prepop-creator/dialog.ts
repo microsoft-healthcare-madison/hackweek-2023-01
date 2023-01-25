@@ -1,13 +1,21 @@
 import { Questionnaire } from 'npm:@types/fhir';
 import { encode, decode } from 'npm:gpt-3-encoder';
 import * as util from "./util.ts";
+import * as YAML from 'npm:yaml';
 
 function cleanseItems(items) {
+  if (!items) return;
   items.forEach(item => {
+    delete item.linkId;
+    delete item.definition;
+    delete item._text;
     delete item.extension;
     delete item.answerOption;
+    delete item.answerValueSet;
     delete item.enableWhen;
     delete item.code;
+    delete item.type;
+    if (item.repeats === false) delete item.repeats;
     if (item.item) cleanseItems(item.item);
   });
 }
@@ -27,24 +35,24 @@ export default async function dialog(
   delete updatedQ.extension;
   cleanseItems(updatedQ.item);
 
-  console.log(JSON.stringify(updatedQ, null, 2));
+  console.log(YAML.stringify(updatedQ, null, 2));
 
   // Substitute the description with one from GPT-3
-  let promptDescription = `Provide a concise summary of what data this FHIR Questionnaire is capturing.
+  let promptDescription = `Provide a concise summary of what data this FHIR Questionnaire is capturing (include details from an existing description already included).
   Also include the purpose(s) of why this data would be collected.
   `
-  promptDescription = promptDescription + "```json\r\n";
-  promptDescription = promptDescription + JSON.stringify(updatedQ, null, 1);
+  promptDescription = promptDescription + "```yaml\r\n";
+  promptDescription = promptDescription + YAML.stringify(updatedQ, null, 1);
   promptDescription = promptDescription + "```\r\n";
 
   // before we send the prompt to GPT-3, we need to encode it (and verify the number of tokens there are)
   const encodedData = await encode(promptDescription);
-  console.log(encodedData);
+  // console.log(encodedData);
   // for(let token of encodedData){
   //   console.log({token, string: decode([token])})
   // }
 
-  if (encodedData.length > 4000) {
+  if (encodedData.length > 6000) {
     console.error("Too many tokens!");
     return -1;
   }
@@ -56,6 +64,7 @@ export default async function dialog(
   });
   q.description = completion.choices[0].text!.trimStart();
   console.log(q.description);
+  console.log(completion.usage?.prompt_tokens + ' tokens in the prompt');
 
   // Now proceed to deduce all the questions!
 
