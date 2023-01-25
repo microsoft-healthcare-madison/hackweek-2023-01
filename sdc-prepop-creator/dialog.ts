@@ -1,5 +1,5 @@
 import { Questionnaire } from 'npm:@types/fhir';
-import { encode, decode } from 'npm:gpt-3-encoder';
+import GPT3Tokenizer from 'npm:gpt3-tokenizer';
 import * as util from "./util.ts";
 import * as YAML from 'npm:yaml';
 
@@ -46,14 +46,11 @@ export default async function dialog(
   promptDescription = promptDescription + "```\r\n";
 
   // before we send the prompt to GPT-3, we need to encode it (and verify the number of tokens there are)
-  const encodedData = await encode(promptDescription);
-  // console.log(encodedData);
-  // for(let token of encodedData){
-  //   console.log({token, string: decode([token])})
-  // }
+  const tokenizer = new GPT3Tokenizer.default({ type: 'codex' }); // or 'gpt3'
+  const encoded: { bpe: number[]; text: string[] } = tokenizer.encode(promptDescription);
 
-  if (encodedData.length > 6000) {
-    console.error("Too many tokens!");
+  if (encoded.text.length > 4000) {
+    console.error(`Too many tokens! ${encoded.text.length}`);
     return -1;
   }
   const completion = await util.completion({
@@ -64,7 +61,7 @@ export default async function dialog(
   });
   q.description = completion.choices[0].text!.trimStart();
   console.log(q.description);
-  console.log(completion.usage?.prompt_tokens + ' tokens in the prompt');
+  console.log(completion.usage?.prompt_tokens + ' tokens in the prompt, ' + encoded.text.length + ' tokens in the encoded prompt');
 
   // Now proceed to deduce all the questions!
 
