@@ -12,7 +12,9 @@
     <Content Include="..\data\CapabilityStatement-backport-subscription-server-r4.json" Link="data\CapabilityStatement-backport-subscription-server-r4.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\data\CapabilityStatement-backport-subscription-server.json" Link="data\CapabilityStatement-backport-subscription-server.json" />
+    <Content Include="..\data\CapabilityStatement-backport-subscription-server.json" Link="data\CapabilityStatement-backport-subscription-server.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\data\CapabilityStatement-r4-capabilitystatement-example-server.json" Link="data\CapabilityStatement-r4-capabilitystatement-example-server.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

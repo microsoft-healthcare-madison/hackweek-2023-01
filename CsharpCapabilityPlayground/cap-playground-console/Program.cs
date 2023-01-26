@@ -13,6 +13,7 @@ using OpenAI.GPT3.Managers;
 using OpenAI.GPT3.ObjectModels;
 using OpenAI.GPT3.ObjectModels.RequestModels;
 using OpenAI.GPT3.ObjectModels.ResponseModels;
+using OpenAI.GPT3.ObjectModels.SharedModels;
 using System.CommandLine;
 using fhir = Hl7.Fhir.Model;
 using fhir4 = fhir4sdk::Hl7.Fhir.Model;
@@ -26,14 +27,28 @@ public static class Program
     /// <summary>The configuration.</summary>
     private static IConfiguration _config;
 
-    private static fhir4sdk::Hl7.Fhir.Serialization.FhirJsonParser _parser = new(new Hl7.Fhir.Serialization.ParserSettings()
+    private static fhir4sdk::Hl7.Fhir.Serialization.FhirJsonParser _parser4 = new(new Hl7.Fhir.Serialization.ParserSettings()
     {
         AcceptUnknownMembers = true,
         AllowUnrecognizedEnums = true,
         PermissiveParsing = true,
     });
 
-    private static fhir4sdk::Hl7.Fhir.Serialization.FhirJsonSerializer _serializer = new(new Hl7.Fhir.Serialization.SerializerSettings()
+    private static fhir4sdk::Hl7.Fhir.Serialization.FhirJsonSerializer _serializer4 = new(new Hl7.Fhir.Serialization.SerializerSettings()
+    {
+        AppendNewLine = false,
+        Pretty = false,
+        TrimWhiteSpacesInXml = true,
+    });
+
+    private static fhir4Bsdk::Hl7.Fhir.Serialization.FhirJsonParser _parser4B = new(new Hl7.Fhir.Serialization.ParserSettings()
+    {
+        AcceptUnknownMembers = true,
+        AllowUnrecognizedEnums = true,
+        PermissiveParsing = true,
+    });
+
+    private static fhir4Bsdk::Hl7.Fhir.Serialization.FhirJsonSerializer _serializer4B = new(new Hl7.Fhir.Serialization.SerializerSettings()
     {
         AppendNewLine = false,
         Pretty = false,
@@ -84,12 +99,12 @@ public static class Program
             {
                 if (file != null)
                 {
-                    Task.Run(() => ProcessFileRequest(file!)).Wait();
+                    Task.Run(() => ProcessFileRequest(file!, version)).Wait();
                 }
 
                 if (url != null)
                 {
-                    Task.Run(() => ProcessUrlRequest(url!)).Wait();
+                    Task.Run(() => ProcessUrlRequest(url!, version)).Wait();
                 }
             },
             fhirVersionOption, fileOption, urlOption);
@@ -98,8 +113,10 @@ public static class Program
     }
 
     /// <summary>Process the file request described by file.</summary>
-    /// <param name="file">The file.</param>
-    private static async Task ProcessFileRequest(FileInfo file)
+    /// <param name="file">   The file.</param>
+    /// <param name="version">The version.</param>
+    /// <returns>An asynchronous result.</returns>
+    private static async Task ProcessFileRequest(FileInfo file, string version)
     {
         if (!file.Exists)
         {
@@ -121,12 +138,14 @@ public static class Program
             return;
         }
 
-        await ProcessJson(contents);
+        await ProcessJson(contents, version);
     }
 
     /// <summary>Process the URL request described by capUrl.</summary>
-    /// <param name="capUrl">URL of the capability.</param>
-    private static async Task ProcessUrlRequest(Uri capUrl)
+    /// <param name="capUrl"> URL of the capability.</param>
+    /// <param name="version">The version.</param>
+    /// <returns>An asynchronous result.</returns>
+    private static async Task ProcessUrlRequest(Uri capUrl, string version)
     {
         try
         {
@@ -154,7 +173,7 @@ public static class Program
                 return;
             }
 
-            await ProcessJson(contents);
+            await ProcessJson(contents, version);
         }
         catch (Exception ex)
         {
@@ -168,12 +187,24 @@ public static class Program
 
     /// <summary>Process the JSON described by capabilityJson.</summary>
     /// <param name="capabilityJson">The capability JSON.</param>
-    private static async Task ProcessJson(string capabilityJson)
+    /// <param name="version">       The version.</param>
+    /// <returns>An asynchronous result.</returns>
+    private static async Task ProcessJson(string capabilityJson, string version)
     {
         try
         {
-            fhir.CapabilityStatement caps = _parser.Parse<fhir.CapabilityStatement>(capabilityJson);
-            await Process(caps);
+            fhir.CapabilityStatement caps;
+            
+            if (version.Equals("r4b", StringComparison.OrdinalIgnoreCase))
+            {
+                caps = _parser4B.Parse<fhir.CapabilityStatement>(capabilityJson);
+            }
+            else
+            {
+                caps = _parser4.Parse<fhir.CapabilityStatement>(capabilityJson);
+            }
+
+            await Process(caps, version);
         }
         catch (Exception ex)
         {
@@ -187,7 +218,7 @@ public static class Program
 
     /// <summary>Process the given CapabilityStatement.</summary>
     /// <param name="caps">The capabilities.</param>
-    private static async Task Process(fhir.CapabilityStatement caps)
+    private static async Task Process(fhir.CapabilityStatement caps, string version)
     {
         // setup OpenAI access
         OpenAIService openAi = new(new OpenAiOptions()
@@ -202,13 +233,28 @@ public static class Program
 
         List<string> summaryComponents = new();
 
-        summaryComponents.Add(await Summarize(openAi, PromptForRoot(_serializer.SerializeToString(root))));
-
-        if (caps.Rest.Any())
+        if (version.Equals("r4b", StringComparison.OrdinalIgnoreCase))
         {
-            foreach (fhir.CapabilityStatement.ResourceComponent resource in caps.Rest.First().Resource)
+            summaryComponents.Add(await Summarize(openAi, PromptForRoot(_serializer4B.SerializeToString(root))));
+
+            if (caps.Rest.Any())
             {
-                summaryComponents.Add(await Summarize(openAi, PromptForResource(_serializer.SerializeToString(resource))));
+                foreach (fhir.CapabilityStatement.ResourceComponent resource in caps.Rest.First().Resource)
+                {
+                    summaryComponents.Add(await Summarize(openAi, PromptForResource(_serializer4B.SerializeToString(resource))));
+                }
+            }
+        }
+        else
+        {
+            summaryComponents.Add(await Summarize(openAi, PromptForRoot(_serializer4.SerializeToString(root))));
+
+            if (caps.Rest.Any())
+            {
+                foreach (fhir.CapabilityStatement.ResourceComponent resource in caps.Rest.First().Resource)
+                {
+                    summaryComponents.Add(await Summarize(openAi, PromptForResource(_serializer4.SerializeToString(resource))));
+                }
             }
         }
 
@@ -228,7 +274,7 @@ Summary of the CapabilityStatment:
         return $"""
 Summarize the following FHIR CapabilityStatement
 - Jurisdiction 001 from UNSD M49 is called the 'universal realm'
-- Include canonical URLs
+- Include the URL for this resource
 {json}
 """;
     }
@@ -271,9 +317,11 @@ Summarize the following FHIR content
                 return string.Empty;
             }
 
-            Console.WriteLine($"Request finished with reason: {completionResult.Choices.First().FinishReason}");
+            ChoiceResponse resp = completionResult.Choices.First();
 
-            string value = completionResult.Choices.First().Text;
+            Console.WriteLine($"Request finished with reason: {resp.FinishReason} ({completionResult.Usage.TotalTokens} tokens)");
+
+            string value = resp.Text;
             return value;
         }
         catch(Exception ex)

@@ -2,7 +2,7 @@
   "profiles": {
     "cap-playground-console": {
       "commandName": "Project",
-      "commandLineArgs": "--file data/CapabilityStatement-backport-subscription-server-r4.json"
+      "commandLineArgs": "--fhir-version r4b --file data/CapabilityStatement-backport-subscription-server.json"
     }
   }
 }
