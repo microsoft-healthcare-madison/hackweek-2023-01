@@ -51,7 +51,7 @@ for i in range(10):
             anns_field="embeddings",
             param=search_params,
             output_fields=['filename', 'chunk'],
-            limit=10,
+            limit=20,
             expr="core==true",
         )[0]
 
