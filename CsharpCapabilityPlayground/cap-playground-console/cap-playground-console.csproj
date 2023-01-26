@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net7.0</TargetFramework>
+    <RootNamespace>cap_playground_console</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="..\data\CapabilityStatement-backport-subscription-server-r4.json" Link="data\CapabilityStatement-backport-subscription-server-r4.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\data\CapabilityStatement-backport-subscription-server.json" Link="data\CapabilityStatement-backport-subscription-server.json" />
+    <Content Include="..\data\CapabilityStatement-r4-capabilitystatement-example-server.json" Link="data\CapabilityStatement-r4-capabilitystatement-example-server.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Betalgo.OpenAI.GPT3" Version="6.6.6" />
+    <PackageReference Include="Hl7.Fhir.R4" Version="5.0.0-beta2" />
+    <PackageReference Include="Hl7.Fhir.R4B" Version="5.0.0-beta2" />
+    <PackageReference Include="Hl7.Fhir.R5" Version="5.0.0-beta2" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="7.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="7.0.0" />
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="data\" />
+  </ItemGroup>
+
+    <Target Name="AddPackageAliases" BeforeTargets="ResolveReferences" Outputs="%(PackageReference.Identity)">
+        <ItemGroup>
+	        <ReferencePath Condition="'%(FileName)'=='Hl7.Fhir.R4'"><Aliases>fhir4sdk</Aliases></ReferencePath>
+	        <ReferencePath Condition="'%(FileName)'=='Hl7.Fhir.R4B'"><Aliases>fhir4Bsdk</Aliases></ReferencePath>
+	        <ReferencePath Condition="'%(FileName)'=='Hl7.Fhir.R5'"><Aliases>fhir5sdk</Aliases></ReferencePath>
+        </ItemGroup>
+    </Target>
+
+</Project>
