@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.4.33213.308
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "cap-playground-console", "cap-playground-console\cap-playground-console.csproj", "{DB723AAC-012F-49F1-A187-CA40D71D2562}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DB723AAC-012F-49F1-A187-CA40D71D2562}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DB723AAC-012F-49F1-A187-CA40D71D2562}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DB723AAC-012F-49F1-A187-CA40D71D2562}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DB723AAC-012F-49F1-A187-CA40D71D2562}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5973AF70-8DF2-4F92-88FB-3B4DDE033849}
+	EndGlobalSection
+EndGlobal
