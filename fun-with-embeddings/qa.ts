@@ -43,7 +43,8 @@ At every step your output is a three-section markdown file containing:
 
 # Critique Your Answer
 (Look closely at the draft answer. Play the role of a picky reviewer to determine:
-  * Break the user's question into tiny details; for each, output a bullet assessing whether your draft addresses this detail
+  * Break the user question into tiny pieces; output a bullet point for each piece and decide whether your draft answers the question to the user's delight
+  * Break down your draft answer into sections; which sections can be deleted without upsetting the user?
   * Does the draft provide helpful JSON examples meeting all aspects of the user's request?
   * Does the draft include markdown https://hl7.org/fhir/* links to the FHIR spec?
   * Can you simplify the draft?
@@ -152,7 +153,7 @@ async function continueSession(session: Session, cycle=0): Promise<Session> {
   for (const p in sessionNext.history.map(h => h.q)) {
     nextStepSearchSet.delete(p)
   }
-  const nextStepSearch = Array.from(new Set(nextStepSearchSet))
+  let nextStepSearch = Array.from(new Set(nextStepSearchSet))
 
   const nextCritique =
       completionText!
@@ -178,6 +179,8 @@ async function continueSession(session: Session, cycle=0): Promise<Session> {
     sessionNext.draftAnswer = nextDraftAnswer;
     console.log("Updated session critique", nextCritique)
     sessionNext.critique = nextCritique || sessionNext.critique;
+  } else {
+    nextStepSearch = [session.userQuestion, ...nextStepSearch]
   }
 
   if (nextStepSearch.length > 0) {
