@@ -4,9 +4,10 @@ interface QueryResult {
   filename: string;
   chunk: number;
   content: string;
+  presented: boolean;
 }
 
-const RESULTS_PER_QUERY = 5;
+const RESULTS_PER_QUERY = 8;
 async function query(q: string, o = 0): Promise<QueryResult[]> {
   const cmd = Deno.run({
     cmd: ["python", "search.py", q],
@@ -15,67 +16,82 @@ async function query(q: string, o = 0): Promise<QueryResult[]> {
   const output = await cmd.output();
   cmd.close();
   const outputText = new TextDecoder().decode(output);
-  const outputJson = JSON.parse(outputText);
-  return outputJson.slice(0,RESULTS_PER_QUERY) as QueryResult[];
+  try {
+    const outputJson = JSON.parse(outputText);
+    return outputJson.slice(0, RESULTS_PER_QUERY).map((r: QueryResult) => ({...r, presented: false})) as QueryResult[];
+  } catch(e) {
+    console.log("Failed to query", q)
+    return []
+  }
 }
 
+interface PromptInput {
+  draftAnswer: string,
+  userQuestion: string,
+  critique: string,
+  history: string
+}
+const promptTemplate = ({draftAnswer, userQuestion, critique, history}: PromptInput) => `
+You are a FHIR spec sherpa. Please answer user questions and provide helpful example instances.
 
-let promptTemplate = `
-# Session State
-
-## User Question
-{{input.userQuestion}}
-
-## Draft Answer
-{{input.draftAnswer}}
-
-## History
-{{input.history}}
 ---
-You are a FHIR community lead. Your role is to answer complex answer user questions with precision and grace. You can:
-
-* SEARCH_FHIR_SPEC(some terms) to gather data that will help you answer the user's question.
-  * MUST: Infer the user's intent and consider use your FHIR knowledge to identify relevant search terms
-  * MUST NOT: repeat previous searches 
-  * MUST NOT: just pass along the user's question
-  * Examples: SEARCH_FHIR_SPEC(medication resource background), SEARCH_FHIR_SPEC(observation resource search parameters), SEARCH_FHIR_SPEC(group vs list resource)
-* RETURN_FINAL_ANSWER to provide your final answer
-
-Be thorough. Do not return a final answer until you have done extensive searches to justify your answer.
 
 At every step your output is a three-section markdown file containing:
 
+# Draft Answer
+(Synthesize a compelling answer to the user's question using the latest <RESULT> values. Please address the following: \n${critique})
+
+# Critique Your Answer
+(Look closely at the draft answer. Play the role of a picky reviewer to determine:
+  * Break the user's question into tiny details; for each, output a bullet assessing whether your draft addresses this detail
+  * Does the draft provide helpful JSON examples meeting all aspects of the user's request?
+  * Does the draft include markdown https://hl7.org/fhir/* links to the FHIR spec?
+  * Can you simplify the draft?
+  * Which unnecessary details can you remove?
+  * Which FHIR resources and elements do you mention? Does the "Current Session > Research Log" show queries to check the facts in your draft answer? Explain why or why not.
+  * Consider new SEARCH_FHIR_SPEC(...) queries to explore areas of the specification based on the user's question, or to fact check your previous work.
+
+Now output your critique with a "## Required Improvements" including bullets for what needs to be improved.
+
+Now output your "## Required Additional Searches" including bullets for new search terms, if needed.)
+
+# Immediate Action
+(Select your next step as a single action based on the critique. 
+* SEARCH_FHIR_SPEC(...) to gather data and continue improving your answer
+* REFINE_ANSWER to address other critique items
+* RETURN_FINAL_ANSWER to provide your final answer)
+
 ---
-# Critique of Draft Answer
-(Will the user be satisfied with the current answer? Is anything incorrect, or do you need to fact-check anything? Have you included references? Is there any extraneous info? Importantly, can any sentences be removed or reorganized?)
+# Current Session
 
-# Updated Draft Answer
-(Here, refine the draft answer based on your critique and all available information. You
- * MUST: summarize in easy-to-understand language
- * MUST: include references to the *.html pages of the FHIR spec
- * MUST: directly address the user's question
- * MUST NOT: include information beyond the user's question)
+## Today's Date
+${new Date().toISOString().slice(0, 10)}
 
-#  Research Plan
-(Formulate a three-step research plan to gather and check your facts. What searches do you want to run? You can look for information about resources, search parameters, valuesets, etc. You want to establish references for every part of your answer.)
+## User Question
+${userQuestion}
 
-#  Immediate Action
-(Select your next action, based on the analysis above. Never repeat a query from your history. You can: SEARCH_FHIR_SPEC(some terms) or  RETURN_FINAL_ANSWER.)
+${draftAnswer ? `##  Answer
+${draftAnswer}` : ""}
+
+## Research Log
+${history}
+
 ---OUTPUT BELOW---
 
-# Critique of Draft Answer
+# Draft Answer
 `;
 
 interface HistorySearch {
   type: "SEARCH";
   q: string;
   results: QueryResult[];
-  presented: number;
 }
 interface Session {
   userQuestion: string;
   draftAnswer: string;
-  history: (HistorySearch )[];
+  history: HistorySearch[];
+  done?: boolean;
+  critique: string;
 }
 
 function formatContent(c: string): string {
@@ -85,42 +101,33 @@ function formatContent(c: string): string {
   return c;
 }
 function promptHistory(session: Session) {
-  const MAX_LENGTH = 4000;
-  let frame = "";
+  const MAX_LENGTH = 5000;
   if (session.history.length == 0) {
-    return "(Research not yet started.)";
+    return "No research queries have been performed";
   }
-  for (let i = session.history.length - 1; i >= 0; i--) {
-    const h = session.history[i];
-    let frameEntry = ``;
-    let frameEntryBullets = ``;
-    for (let j = 0; j < h.results.length; j++) {
-      if (i < session.history.length - 1) {
-        continue;
-      }
-      if (
-        j >= h.presented &&
-        frame.length + frameEntry.length + frameEntryBullets.length < MAX_LENGTH
-      ) {
-        frameEntryBullets += `  * Result ${j + 1}: <RESULT>${formatContent(
-          h.results[j].content
-        )}</RESULT>\n`;
-        h.presented++;
-      }
+  let ret = `Previous Queries: ${session.history.map(h => `* ${h.q}\n`).join("")}`
+
+  session.history.flatMap(h => h.results.filter(r => !r.presented)).forEach(r => {
+    const chunk = `\n* <RESULT>${formatContent(
+      r.content
+        )}</RESULT>`;
+    if (ret.length + chunk.length < MAX_LENGTH) {
+      ret += chunk;
+      r.presented = true
     }
-    frameEntry += frameEntryBullets;
-    frame = frameEntry + "\n" + frame;
-  }
-  return frame;
+  })
+  return ret;
 }
 
-async function continueSession(session: Session): Promise<Session> {
+async function continueSession(session: Session, cycle=0): Promise<Session> {
   let sessionNext = JSON.parse(JSON.stringify(session)) as Session;
-
-  let prompt = promptTemplate
-    .replaceAll("{{input.userQuestion}}", sessionNext.userQuestion)
-    .replaceAll("{{input.draftAnswer}}", sessionNext.draftAnswer)
-    .replaceAll("{{input.history}}", promptHistory(sessionNext));
+  let hx = promptHistory(sessionNext);
+  let prompt = promptTemplate({
+    critique: sessionNext.critique,
+    userQuestion: sessionNext.userQuestion,
+    draftAnswer: sessionNext.draftAnswer,
+    history: hx
+  })
   console.log(prompt, "^prompt");
 
   const completion = await util.completion({
@@ -130,66 +137,85 @@ async function continueSession(session: Session): Promise<Session> {
     max_tokens: 1000,
   });
 
-  let completionText = completion.choices[0].text;
+  const completionText = completion.choices[0].text;
 
-  console.log("completion", completionText);
+  console.log(completionText);
 
-  let nextStepSearch = Array.from(
+  const nextStepSearchRaw = Array.from(
     completionText!
-      .split("Immediate Action")[1]
+      .split("Critique Your Answer")[1]
       .matchAll(/SEARCH_FHIR_SPEC\((.*?)\)/gms),
     (r) => r[1]
-  )[0];
+  );
 
-  let nextStepContinue = sessionNext.history.length > 0 && sessionNext.history.slice(-1)[0].presented < sessionNext.history.slice(-1)[0].results.length
+  const nextStepSearchSet = new Set(nextStepSearchRaw)
+  for (const p in sessionNext.history.map(h => h.q)) {
+    nextStepSearchSet.delete(p)
+  }
+  const nextStepSearch = Array.from(new Set(nextStepSearchSet))
 
-  let nextDraftAnswer = completionText!
-    .split("Updated Draft Answer")[1]
+  const nextCritique =
+      completionText!
+        .split("# Required Improvements")[1]
+        .split("#")[0].trim();
+
+  const nextStepReturn =
+    Array.from(
+      completionText!
+        .split("Critique")[1]
+        .matchAll(/RETURN_FINAL_ANSWER/gms)
+    ).length > 0;
+  if (nextStepReturn) {
+    sessionNext.done = true;
+    return sessionNext;
+  }
+
+  const nextDraftAnswer = completionText!
     .split("#")[0]
     .trim();
 
-  sessionNext.draftAnswer = nextDraftAnswer;
+  if (cycle > 0) {
+    sessionNext.draftAnswer = nextDraftAnswer;
+    console.log("Updated session critique", nextCritique)
+    sessionNext.critique = nextCritique || sessionNext.critique;
+  }
 
-  if (!nextStepContinue && nextStepSearch) {
-    sessionNext.history.push({
-      type: "SEARCH",
-      q: nextStepSearch.replaceAll('"', "").replaceAll("'", ""),
-      results: await query(nextStepSearch),
-      presented: 0,
-    });
+  if (nextStepSearch.length > 0) {
+    for (const q of nextStepSearch) {
+      sessionNext.history.push({type: "SEARCH", q, results: await query(q) })
+    }
   }
 
   return sessionNext;
 }
 
-export default async function qa(question: string): Promise<string> {
-  const session = {
-    userQuestion: question,
-    draftAnswer: "(Not started yet.)",
-    history: [],
-  };
-  const response = await continueSession(session);
-  console.log(JSON.stringify(response, null, 2));
-  return "Done";
-}
-
-const stepFile = () => `${Deno.args[0]}.${step}.json`
+const stepFile = () => `${Deno.args[0]}.${step}.json`;
 const question = Deno.args[1];
 let step = 0;
 let session: Session = {
   userQuestion: question,
   draftAnswer: "(Not started yet.)",
   history: [],
+  critique: `
+ * If search results are relevant to the user's question, incorporate then. If not, ignore them.
+ * Summarize a complete draft in easy-to-understand language
+ * include references to the *.html pages of the FHIR spec
+ * fix issues from your critique
+ * simplify, simplify, simplify!  `
 };
 
 Deno.writeTextFileSync(stepFile(), JSON.stringify(session, null, 2));
 while (step < 5) {
   try {
-    session = await continueSession(session);
+    session = await continueSession(session, step);
     Deno.writeTextFileSync(stepFile(), JSON.stringify(session, null, 2));
-  } catch {
-    console.error("Failed step", step)
+    if (session.done) {
+      Deno.exit(0);
+    }
+  } catch (e) {
+    console.error(e);
+    console.error("Failed step", step);
   }
   step += 1;
-  console.log("On to step", step)
+  console.log("On to step", step);
 }

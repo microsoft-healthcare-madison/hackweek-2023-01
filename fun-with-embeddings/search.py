@@ -38,7 +38,7 @@ import json
 with open("./chunks.json") as chunks:
     filename_to_chunks = json.load(chunks)
 
-for i in range(10):
+for i in range(20):
     try:
         schema = CollectionSchema(fields, "FHIR Spec embedded by openai")
         fhir_milvus = Collection("fhir_spec_txt", schema)
@@ -64,5 +64,5 @@ for i in range(10):
     except SystemExit:
         sys.exit(0)
     except: 
-        time.sleep(.5)
+        time.sleep(.25)
         pass
