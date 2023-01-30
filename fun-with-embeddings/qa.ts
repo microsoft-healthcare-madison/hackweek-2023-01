@@ -18,20 +18,47 @@ async function query(q: string, o = 0): Promise<QueryResult[]> {
   const outputText = new TextDecoder().decode(output);
   try {
     const outputJson = JSON.parse(outputText);
-    return outputJson.slice(0, RESULTS_PER_QUERY).map((r: QueryResult) => ({...r, presented: false})) as QueryResult[];
-  } catch(e) {
-    console.log("Failed to query", q)
-    return []
+    return outputJson
+      .slice(0, RESULTS_PER_QUERY)
+      .map((r: QueryResult) => ({ ...r, presented: false })) as QueryResult[];
+  } catch (e) {
+    console.log("Failed to query", q);
+    return [];
   }
 }
 
-interface PromptInput {
-  draftAnswer: string,
-  userQuestion: string,
-  critique: string,
-  history: string
+const RESULTS_PER_SNOMED_QUERY = 10;
+async function querySnomed(q: string): Promise<QueryResult[]> {
+  const reqUrl = `https://tx.fhir.org/r4/ValueSet/2.16.840.1.113762.1.4.1018.240/$expand?filter=${encodeURIComponent(
+    q
+  )}`;
+  const resp = await (
+    await fetch(reqUrl, { headers: { Accept: "application/fhir+json" } })
+  ).json();
+  const ret = (resp?.expansion?.contains)
+    .slice(0, RESULTS_PER_SNOMED_QUERY)
+    .map((v: any) => ({
+      filename: "SNOMED.txt", // TODO remove these from the model or generalize so they make sense for vocab
+      chunk: 0,
+      content: JSON.stringify(v, null, 2),
+      presented: false,
+    }));
+
+  return ret
 }
-const promptTemplate = ({draftAnswer, userQuestion, critique, history}: PromptInput) => `
+
+interface PromptInput {
+  draftAnswer: string;
+  userQuestion: string;
+  critique: string;
+  history: string;
+}
+const promptTemplate = ({
+  draftAnswer,
+  userQuestion,
+  critique,
+  history,
+}: PromptInput) => `
 You are a FHIR spec sherpa. Please answer user questions and provide helpful example instances.
 
 ---
@@ -50,7 +77,8 @@ At every step your output is a three-section markdown file containing:
   * Can you simplify the draft?
   * Which unnecessary details can you remove?
   * Which FHIR resources and elements do you mention? Does the "Current Session > Research Log" show queries to check the facts in your draft answer? Explain why or why not.
-  * Consider new SEARCH_FHIR_SPEC(...) queries to explore areas of the specification based on the user's question, or to fact check your previous work.
+  * Consider new SEARCH_FHIR_SPEC(q) queries to explore areas of the specification based on the user's question, or to fact check your previous work.
+  * Consider new SEARCH_SNOMED(q) queries to find SNOMED CT Core Problem codes matching an english word or phrase
 
 Now output your critique with a "## Required Improvements" including bullets for what needs to be improved.
 
@@ -58,7 +86,8 @@ Now output your "## Required Additional Searches" including bullets for new sear
 
 # Immediate Action
 (Select your next step as a single action based on the critique. 
-* SEARCH_FHIR_SPEC(...) to gather data and continue improving your answer
+* SEARCH_FHIR_SPEC($terms) -- replace "$terms" to gather data and continue improving your answer
+* SEARCH_SNOMED($terms) -- replace "$terms" to look up SNOMED CT Core Problem codes
 * REFINE_ANSWER to address other critique items
 * RETURN_FINAL_ANSWER to provide your final answer)
 
@@ -71,8 +100,12 @@ ${new Date().toISOString().slice(0, 10)}
 ## User Question
 ${userQuestion}
 
-${draftAnswer ? `##  Answer
-${draftAnswer}` : ""}
+${
+  draftAnswer
+    ? `##  Answer
+${draftAnswer}`
+    : ""
+}
 
 ## Research Log
 ${history}
@@ -106,29 +139,32 @@ function promptHistory(session: Session) {
   if (session.history.length == 0) {
     return "No research queries have been performed";
   }
-  let ret = `Previous Queries: ${session.history.map(h => `* ${h.q}\n`).join("")}`
 
-  session.history.flatMap(h => h.results.filter(r => !r.presented)).forEach(r => {
-    const chunk = `\n* <RESULT>${formatContent(
-      r.content
-        )}</RESULT>`;
-    if (ret.length + chunk.length < MAX_LENGTH) {
-      ret += chunk;
-      r.presented = true
-    }
-  })
+  let ret = `Previous Queries:\n${session.history
+    .map((h) => `* ${h.q}\n`)
+    .join("")}`;
+
+  session.history
+    .flatMap((h) => h.results.filter((r) => !r.presented))
+    .forEach((r) => {
+      const chunk = `\n* <RESULT>${formatContent(r.content)}</RESULT>`;
+      if (ret.length + chunk.length < MAX_LENGTH) {
+        ret += chunk;
+        r.presented = true;
+      }
+    });
   return ret;
 }
 
-async function continueSession(session: Session, cycle=0): Promise<Session> {
+async function continueSession(session: Session, cycle = 0): Promise<Session> {
   let sessionNext = JSON.parse(JSON.stringify(session)) as Session;
   let hx = promptHistory(sessionNext);
   let prompt = promptTemplate({
     critique: sessionNext.critique,
     userQuestion: sessionNext.userQuestion,
     draftAnswer: sessionNext.draftAnswer,
-    history: hx
-  })
+    history: hx,
+  });
   console.log(prompt, "^prompt");
 
   const completion = await util.completion({
@@ -142,6 +178,17 @@ async function continueSession(session: Session, cycle=0): Promise<Session> {
 
   console.log(completionText);
 
+  const nextStepSnomedSearch = [
+    ...new Set(
+      Array.from(
+        completionText!
+          .split("Critique Your Answer")[1]
+          .matchAll(/SEARCH_SNOMED\((.*?)\)/gms),
+        (r) => r[1]
+      )
+    ),
+  ].filter((t) => !sessionNext.history.map((h) => h.q).includes(t));
+
   const nextStepSearchRaw = Array.from(
     completionText!
       .split("Critique Your Answer")[1]
@@ -149,43 +196,49 @@ async function continueSession(session: Session, cycle=0): Promise<Session> {
     (r) => r[1]
   );
 
-  const nextStepSearchSet = new Set(nextStepSearchRaw)
-  for (const p in sessionNext.history.map(h => h.q)) {
-    nextStepSearchSet.delete(p)
+  const nextStepSearchSet = new Set(nextStepSearchRaw);
+  for (const p in sessionNext.history.map((h) => h.q)) {
+    nextStepSearchSet.delete(p);
   }
-  let nextStepSearch = Array.from(new Set(nextStepSearchSet))
+  let nextStepSearch = Array.from(new Set(nextStepSearchSet));
 
-  const nextCritique =
-      completionText!
-        .split("# Required Improvements")[1]
-        .split("#")[0].trim();
+  const nextCritique = completionText!
+    .split("# Required Improvements")[1]
+    .split("#")[0]
+    .trim();
 
   const nextStepReturn =
     Array.from(
-      completionText!
-        .split("Critique")[1]
-        .matchAll(/RETURN_FINAL_ANSWER/gms)
+      completionText!.split("Critique")[1].matchAll(/RETURN_FINAL_ANSWER/gms)
     ).length > 0;
   if (nextStepReturn) {
     sessionNext.done = true;
     return sessionNext;
   }
 
-  const nextDraftAnswer = completionText!
-    .split("#")[0]
-    .trim();
+  const nextDraftAnswer = completionText!.split("#")[0].trim();
 
   if (cycle > 0) {
     sessionNext.draftAnswer = nextDraftAnswer;
-    console.log("Updated session critique", nextCritique)
+    console.log("Updated session critique", nextCritique);
     sessionNext.critique = nextCritique || sessionNext.critique;
   } else {
-    nextStepSearch = [session.userQuestion, ...nextStepSearch]
+    nextStepSearch = [session.userQuestion, ...nextStepSearch];
+  }
+
+  if (nextStepSnomedSearch.length > 0) {
+    for (const q of nextStepSnomedSearch) {
+      sessionNext.history.push({
+        type: "SEARCH",
+        q,
+        results: await querySnomed(q),
+      });
+    }
   }
 
   if (nextStepSearch.length > 0) {
     for (const q of nextStepSearch) {
-      sessionNext.history.push({type: "SEARCH", q, results: await query(q) })
+      sessionNext.history.push({ type: "SEARCH", q, results: await query(q) });
     }
   }
 
@@ -204,7 +257,7 @@ let session: Session = {
  * Summarize a complete draft in easy-to-understand language
  * include references to the *.html pages of the FHIR spec
  * fix issues from your critique
- * simplify, simplify, simplify!  `
+ * simplify, simplify, simplify!  `,
 };
 
 Deno.writeTextFileSync(stepFile(), JSON.stringify(session, null, 2));
