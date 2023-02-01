@@ -7,7 +7,7 @@ interface QueryResult {
   presented: boolean;
 }
 
-const RESULTS_PER_QUERY = 8;
+const RESULTS_PER_QUERY = 2;
 async function query(q: string, o = 0): Promise<QueryResult[]> {
   const cmd = Deno.run({
     cmd: ["python", "search.py", q],
@@ -27,24 +27,37 @@ async function query(q: string, o = 0): Promise<QueryResult[]> {
   }
 }
 
-const RESULTS_PER_SNOMED_QUERY = 10;
-async function querySnomed(q: string): Promise<QueryResult[]> {
-  const reqUrl = `https://tx.fhir.org/r4/ValueSet/2.16.840.1.113762.1.4.1018.240/$expand?filter=${encodeURIComponent(
+const RESULTS_PER_SNOMED_QUERY = 3;
+async function querySnomed(t:string, q: string): Promise<QueryResult[]> {
+  const vs = {
+    snomed: "2.16.840.1.113762.1.4.1018.240",
+    loinc: "observation-codes"
+  }[t];
+  if (!vs) {
+    console.log("Canot look up VS ", vs);
+    return []
+  }
+
+  const reqUrl = `https://tx.fhir.org/r4/ValueSet/${vs}/$expand?filter=${encodeURIComponent(
     q
   )}`;
+
   const resp = await (
     await fetch(reqUrl, { headers: { Accept: "application/fhir+json" } })
   ).json();
-  const ret = (resp?.expansion?.contains)
-    .slice(0, RESULTS_PER_SNOMED_QUERY)
-    .map((v: any) => ({
-      filename: "SNOMED.txt", // TODO remove these from the model or generalize so they make sense for vocab
-      chunk: 0,
-      content: JSON.stringify(v, null, 2),
-      presented: false,
-    }));
 
-  return ret
+  const ret =
+    ((resp?.expansion?.contains) || []).slice(0, RESULTS_PER_SNOMED_QUERY) || [];
+  return [
+    {
+      filename: vs+".txt", // TODO remove these from the model or generalize so they make sense for vocab
+      chunk: 0,
+      content:
+        "Each of the following terms matches " + q + ": "+
+        JSON.stringify(ret, null, 2),
+      presented: false,
+    },
+  ];
 }
 
 interface PromptInput {
@@ -56,40 +69,41 @@ interface PromptInput {
 const promptTemplate = ({
   draftAnswer,
   userQuestion,
-  critique,
+  critique: _critique,
   history,
 }: PromptInput) => `
-You are a FHIR spec sherpa. Please answer user questions and provide helpful example instances.
+You are a FHIR spec sherpa. Please answer user questions and provide small, simple example instances.
 
 ---
 
-At every step your output is a three-section markdown file containing:
+At every step, produce output for three tasks in "#" sections.
 
-# Draft Answer
-(Synthesize a compelling answer to the user's question using the latest <RESULT> values. Please address the following: \n${critique})
+# 1. Critique of the Preliminary Answer
+<TASK DESCRIPTION>
+1a. List each detail the user asked about (sub-bullets for each detail)
+1b. Determine whether the details has been supplied to satisfy the user
+2a. List each detail of the response (sub-bullets for each detail)
+2b. Determine whether the detail can be removed while satisfying the user's question
+3a. List each FHIR element or coding used in the answer
+3b. Determine whether it has been verified in the research log, or if a new query is needed
 
-# Critique Your Answer
-(Look closely at the draft answer. Play the role of a picky reviewer to determine:
-  * Break the user question into tiny pieces; output a bullet point for each piece and decide whether your draft answers the question to the user's delight
-  * Break down your draft answer into sections; which sections can be deleted without upsetting the user?
-  * Does the draft provide helpful JSON examples meeting all aspects of the user's request?
-  * Does the draft include markdown https://hl7.org/fhir/* links to the FHIR spec?
-  * Can you simplify the draft?
-  * Which unnecessary details can you remove?
-  * Which FHIR resources and elements do you mention? Does the "Current Session > Research Log" show queries to check the facts in your draft answer? Explain why or why not.
-  * Consider new SEARCH_FHIR_SPEC(q) queries to explore areas of the specification based on the user's question, or to fact check your previous work.
-  * Consider new SEARCH_SNOMED(q) queries to find SNOMED CT Core Problem codes matching an english word or phrase
+Play the role of a picky reviewer to determine how to make the answer correct and as short as possible. Be sure to include resource examples and markdown links to the FHIR spec, when relevant. Be sure that all details have been researched in the query log. What new SEARCH_FHIR($queryInEnglish) or SEARCH_VOCAB(snomed | loinc, description) queries can improve the answer quality?
 
-Now output your critique with a "## Required Improvements" including bullets for what needs to be improved.
+</TASK DESCRIPTION>
 
-Now output your "## Required Additional Searches" including bullets for new search terms, if needed.)
+# 2. Your Answer
+<TASK DESCRIPTION>
+Ready the critique carefully. Now fix those problems in a new answer, written in the 2nd person. Pay specific attention to any Required Improvements. Apply these improvements to produce a new, compelling answer to the user's question, no more and no less. If any <RESULT>s from the Research Log are directly relevant for the user, incorporate them. Otherwise, ignore the <RESULT>s.
 
-# Immediate Action
-(Select your next step as a single action based on the critique. 
-* SEARCH_FHIR_SPEC($terms) -- replace "$terms" to gather data and continue improving your answer
-* SEARCH_SNOMED($terms) -- replace "$terms" to look up SNOMED CT Core Problem codes
-* REFINE_ANSWER to address other critique items
-* RETURN_FINAL_ANSWER to provide your final answer)
+Next, output "## Required Additional Searches" including bullets to SEARCH_FHIR for any data model or narrative text that will guide you, or SEARCH_VOCAB(snomed | loinc, description in english) for any codings, using english language arguments for the description. SEARCH_VOCAB can check any codings in your examples. Example syntax: SEARCH_VOCAB(snomed, hypertension), SEARCH_VOCAB(loinc, systolic blood pressure). Make sure you search the FHIR spec to find the best answers, and to confirm all details of your response.
+</TASK DESCRIPTION>
+
+# 3. Immediate Action
+<TASK DESCRIPTION>
+Select your next step as a single action
+* IMPROVE_ANSWER if further research or improvements are needed
+* RETURN_FINAL_ANSWER if this is complete and correct
+</TASK DESCRIPTION>
 
 ---
 # Current Session
@@ -97,12 +111,17 @@ Now output your "## Required Additional Searches" including bullets for new sear
 ## Today's Date
 ${new Date().toISOString().slice(0, 10)}
 
+## Preferred Codings
+
+Observation.code: use loinc
+Condition.code: use snomed
+
 ## User Question
 ${userQuestion}
 
 ${
   draftAnswer
-    ? `##  Answer
+    ? `## Preliminary Answer 
 ${draftAnswer}`
     : ""
 }
@@ -110,13 +129,14 @@ ${draftAnswer}`
 ## Research Log
 ${history}
 
----OUTPUT BELOW---
+---OUTPUT 3 PARTS BELOW---
 
-# Draft Answer
+# 1. Critique of the Preliminary Answer
 `;
 
 interface HistorySearch {
   type: "SEARCH";
+  subtype: string,
   q: string;
   results: QueryResult[];
 }
@@ -141,16 +161,22 @@ function promptHistory(session: Session) {
   }
 
   let ret = `Previous Queries:\n${session.history
-    .map((h) => `* ${h.q}\n`)
+    .map((h) => `* Search ${h.subtype}: ${h.q}\n`)
     .join("")}`;
 
+
+  let added = false;
   session.history
     .flatMap((h) => h.results.filter((r) => !r.presented))
     .forEach((r) => {
       const chunk = `\n* <RESULT>${formatContent(r.content)}</RESULT>`;
       if (ret.length + chunk.length < MAX_LENGTH) {
+        if (!added) {
+          ret += "\n## Search Results Page (ephemeral; use them in your answer immediately)\n"
+        }
         ret += chunk;
         r.presented = true;
+        added = true
       }
     });
   return ret;
@@ -169,7 +195,7 @@ async function continueSession(session: Session, cycle = 0): Promise<Session> {
 
   const completion = await util.completion({
     model: "text-davinci-003",
-    temperature: 0.5,
+    temperature: 0.0,
     prompt,
     max_tokens: 1000,
   });
@@ -178,68 +204,61 @@ async function continueSession(session: Session, cycle = 0): Promise<Session> {
 
   console.log(completionText);
 
-  const nextStepSnomedSearch = [
-    ...new Set(
-      Array.from(
-        completionText!
-          .split("Critique Your Answer")[1]
-          .matchAll(/SEARCH_SNOMED\((.*?)\)/gms),
-        (r) => r[1]
-      )
-    ),
-  ].filter((t) => !sessionNext.history.map((h) => h.q).includes(t));
+  const searchesToTerms = (re: RegExp): string[] =>
+    [
+      ...new Set(
+        Array.from(
+          completionText!.split("Additional Searches")?.[1]?.matchAll(re) || [],
+          (r) => r[1]
+        )
+      ),
+    ].filter((t) => !sessionNext.history.map((h) => h.q).includes(t));
 
-  const nextStepSearchRaw = Array.from(
-    completionText!
-      .split("Critique Your Answer")[1]
-      .matchAll(/SEARCH_FHIR_SPEC\((.*?)\)/gms),
-    (r) => r[1]
-  );
-
-  const nextStepSearchSet = new Set(nextStepSearchRaw);
-  for (const p in sessionNext.history.map((h) => h.q)) {
-    nextStepSearchSet.delete(p);
-  }
-  let nextStepSearch = Array.from(new Set(nextStepSearchSet));
+  const requestedSearchesSnomed = searchesToTerms(/SEARCH_VOCAB\((.*?)\)/gms);
+  const requestedSearchesFhir = (
+    cycle == 0 ? [session.userQuestion] : []
+  ).concat(searchesToTerms(/SEARCH_FHIR\((.*?)\)/gms));
 
   const nextCritique = completionText!
-    .split("# Required Improvements")[1]
-    .split("#")[0]
-    .trim();
+    .split(/^# /gms)?.[0]
+    ?.trim();
 
-  const nextStepReturn =
-    Array.from(
-      completionText!.split("Critique")[1].matchAll(/RETURN_FINAL_ANSWER/gms)
-    ).length > 0;
-  if (nextStepReturn) {
-    sessionNext.done = true;
-    return sessionNext;
-  }
-
-  const nextDraftAnswer = completionText!.split("#")[0].trim();
+  const nextDraftAnswer = completionText!.split("Your Answer")?.[1]?.split("#")?.[0].trim();
 
   if (cycle > 0) {
     sessionNext.draftAnswer = nextDraftAnswer;
-    console.log("Updated session critique", nextCritique);
     sessionNext.critique = nextCritique || sessionNext.critique;
-  } else {
-    nextStepSearch = [session.userQuestion, ...nextStepSearch];
+  } else if (requestedSearchesSnomed.length > 0) {
+    for (const q of requestedSearchesSnomed) {
+      const [v, t]: string[] = q.split(", ", 2);
+      sessionNext.history.push({
+        type: "SEARCH",
+        subtype: v,
+        q,
+        results: await querySnomed(v, t),
+      });
+    }
   }
-
-  if (nextStepSnomedSearch.length > 0) {
-    for (const q of nextStepSnomedSearch) {
+  if (requestedSearchesFhir.length > 0) {
+    for (const q of requestedSearchesFhir) {
       sessionNext.history.push({
         type: "SEARCH",
         q,
-        results: await querySnomed(q),
+        results: await query(q),
+        subtype: "FHIR",
       });
     }
   }
 
-  if (nextStepSearch.length > 0) {
-    for (const q of nextStepSearch) {
-      sessionNext.history.push({ type: "SEARCH", q, results: await query(q) });
-    }
+  const nextStepReturn =
+      !!completionText?.match(/RETURN_FINAL_ANSWER/gms)
+
+  if (
+    nextStepReturn &&
+    cycle > 0 && 
+    sessionNext.history.flatMap((q) => q.results).every((r) => r.presented)
+  ) {
+    sessionNext.done = true;
   }
 
   return sessionNext;
@@ -253,11 +272,11 @@ let session: Session = {
   draftAnswer: "(Not started yet.)",
   history: [],
   critique: `
- * If search results are relevant to the user's question, incorporate then. If not, ignore them.
- * Summarize a complete draft in easy-to-understand language
+ * Look for RESULTs. Some RESULTS are safe to ignore. Only pay attention to directly relevant RESULTs.
+ * Summarize an answer in easy-to-understand language
  * include references to the *.html pages of the FHIR spec
  * fix issues from your critique
- * simplify, simplify, simplify!  `,
+ * simplify! Omit needless content.\n`,
 };
 
 Deno.writeTextFileSync(stepFile(), JSON.stringify(session, null, 2));
