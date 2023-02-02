@@ -25,30 +25,44 @@ async function continueSession(session: Session, cycle = 0): Promise<Session> {
     max_tokens: 1200,
   });
 
-  let completionText = completion.choices[0].text;
+  const completionText = completion.choices[0].text!;
   console.log(completionText);
-  // if (completionText?.includes("# Updated Answer Template")) {
-  //   completionText = completionText.split("# Updated Answer Template")[1]
-  // }
 
   sessionNext.answer = completionText!;
 
   if (stepType !== "finalize") {
-    const tasks: { dependsOn: number[]; query: string; returns: string }[] =
-      Array.from(
-        completionText!.matchAll(
-          /(dependsOn="(.*?)")? query="(.*?)"\s+returns="(.*?)"/g
-        ),
-        (r) => ({
-          dependsOn:
-            r[2]
-              ?.split(",")
-              .map(parseInt)
-              .filter((x) => !!x) || [],
-          query: r[3],
-          returns: r[4],
-        })
-      ).filter((t) => !session.history.map((r) => r.query).includes(t.query));
+    const tasks: {
+      id: number;
+      dependsOn: number[];
+      query: string;
+      returns: string;
+    }[] = Array.from(
+      completionText!.matchAll(
+        /TODO \s*?(id="(.*?)")?\s+(dependsOn="(.*?)")?\s+query="(.*?)"\s+returns="(.*?)">/g
+      ),
+      (r) => ({
+        id: parseInt(r[2]),
+        dependsOn:
+          r[4]
+            ?.split(",")
+            .map(parseInt)
+            .filter((x) => !!x) || [],
+        query: r[5],
+        returns: r[6],
+      })
+    ).filter((t) => !session.history.map((r) => r.query).includes(t.query));
+    let progress = false;
+    do {
+      progress = false;
+      const ids = tasks.map((t) => t.id);
+      tasks.forEach((t) => {
+        const dependsOn = t.dependsOn.filter((i) => !ids.includes(i));
+        if (dependsOn.length !== t.dependsOn.length) {
+          t.dependsOn = dependsOn;
+          progress = true;
+        }
+      });
+    } while (progress);
     tasks.sort(
       (a, b) =>
         1000 * a.dependsOn.length +
@@ -60,7 +74,9 @@ async function continueSession(session: Session, cycle = 0): Promise<Session> {
     console.log(tasks);
     const immediateTask = tasks[0];
     if (immediateTask) {
-      const result = prompt(`Query ${immediateTask.query} for ${immediateTask.returns}`)!;
+      const result = prompt(
+        `Query ${immediateTask.query} for ${immediateTask.returns}`
+      )!;
       const results = [{ query: immediateTask.query, result }];
       sessionNext.results = results;
       sessionNext.history = [...sessionNext.history, ...results];
